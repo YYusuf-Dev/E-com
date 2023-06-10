@@ -2,10 +2,6 @@ import getVariation from "./getVariation.js";
 import { variationPlacements, basePlacements, placements as allPlacements } from "../enums.js";
 import detectOverflow from "./detectOverflow.js";
 import getBasePlacement from "./getBasePlacement.js";
-
-/*:: type OverflowsMap = { [ComputedPlacement]: number }; */
-
-/*;; type OverflowsMap = { [key in ComputedPlacement]: number }; */
 export default function computeAutoPlacement(state, options) {
   if (options === void 0) {
     options = {};
@@ -29,10 +25,6 @@ export default function computeAutoPlacement(state, options) {
 
   if (allowedPlacements.length === 0) {
     allowedPlacements = placements;
-
-    if (false) {
-      console.error(['Popper: The `allowedAutoPlacements` option did not allow any', 'placements. Ensure the `placement` option matches the variation', 'of the allowed placements.', 'For example, "auto" cannot be used to allow "bottom-start".', 'Use "auto-start" instead.'].join(' '));
-    }
   } // $FlowFixMe[incompatible-type]: Flow seems to have problems with two array unions...
 
 

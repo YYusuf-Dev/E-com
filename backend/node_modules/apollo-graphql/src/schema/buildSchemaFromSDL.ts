@@ -18,19 +18,26 @@ import {
   isAbstractType,
   isScalarType,
   isEnumType,
-  GraphQLEnumValueConfig
+  GraphQLEnumValueConfig,
+  DirectiveNode,
 } from "graphql";
 import { validateSDL } from "graphql/validation/validate";
 import { isDocumentNode, isNode } from "../utilities/graphql";
 import { GraphQLResolverMap } from "./resolverMap";
 import { GraphQLSchemaValidationError } from "./GraphQLSchemaValidationError";
 import { specifiedSDLRules } from "graphql/validation/specifiedRules";
+
+// TODO(Node.js 10): When we deprecate Node.js 10, remove this and switch
+// to using `Array.prototype.flat`.  When doing this, deleting the hand-rolled
+// types in `./packages/apollo-gateway/src/types/` that go with it.
+import flat from "core-js-pure/features/array/flat";
+
 import {
   KnownTypeNamesRule,
   UniqueDirectivesPerLocationRule,
-  ValidationRule
+  ValidationRule,
 } from "graphql/validation";
-import { mapValues, isNotNullOrUndefined } from "apollo-env";
+import { mapValues } from "../utilities/mapValues";
 
 export interface GraphQLSchemaModule {
   typeDefs: DocumentNode;
@@ -39,7 +46,7 @@ export interface GraphQLSchemaModule {
 
 const skippedSDLRules: ValidationRule[] = [
   KnownTypeNamesRule,
-  UniqueDirectivesPerLocationRule
+  UniqueDirectivesPerLocationRule,
 ];
 
 // BREAKING VERSION: Remove this when graphql-js 15 is minimum version.
@@ -47,8 +54,8 @@ const skippedSDLRules: ValidationRule[] = [
 // exposed directly from the rules module above. This may change in the future!
 // Additionally, it does not exist in prior graphql versions. Thus this try/catch.
 try {
-  const PossibleTypeExtensions: typeof import("graphql/validation/rules/PossibleTypeExtensions").PossibleTypeExtensions = require("graphql/validation/rules/PossibleTypeExtensions")
-    .PossibleTypeExtensions;
+  const PossibleTypeExtensions: typeof import("graphql/validation/rules/PossibleTypeExtensions").PossibleTypeExtensions =
+    require("graphql/validation/rules/PossibleTypeExtensions").PossibleTypeExtensions;
   if (PossibleTypeExtensions) {
     skippedSDLRules.push(PossibleTypeExtensions);
   }
@@ -58,14 +65,14 @@ try {
 }
 
 const sdlRules = specifiedSDLRules.filter(
-  rule => !skippedSDLRules.includes(rule)
+  (rule) => !skippedSDLRules.includes(rule)
 );
 
 export function modulesFromSDL(
   modulesOrSDL: (GraphQLSchemaModule | DocumentNode)[] | DocumentNode
 ): GraphQLSchemaModule[] {
   if (Array.isArray(modulesOrSDL)) {
-    return modulesOrSDL.map(moduleOrSDL => {
+    return modulesOrSDL.map((moduleOrSDL) => {
       if (isNode(moduleOrSDL) && isDocumentNode(moduleOrSDL)) {
         return { typeDefs: moduleOrSDL };
       } else {
@@ -83,7 +90,7 @@ export function buildSchemaFromSDL(
 ): GraphQLSchema {
   const modules = modulesFromSDL(modulesOrSDL);
 
-  const documentAST = concatAST(modules.map(module => module.typeDefs));
+  const documentAST = concatAST(modules.map((module) => module.typeDefs));
 
   const errors = validateSDL(documentAST, schemaToExtend, sdlRules);
   if (errors.length > 0) {
@@ -102,6 +109,7 @@ export function buildSchemaFromSDL(
 
   const schemaDefinitions: SchemaDefinitionNode[] = [];
   const schemaExtensions: SchemaExtensionNode[] = [];
+  const schemaDirectives: DirectiveNode[] = [];
 
   for (const definition of documentAST.definitions) {
     if (isTypeDefinitionNode(definition)) {
@@ -124,6 +132,9 @@ export function buildSchemaFromSDL(
       directiveDefinitions.push(definition);
     } else if (definition.kind === Kind.SCHEMA_DEFINITION) {
       schemaDefinitions.push(definition);
+      schemaDirectives.push(
+        ...(definition.directives ? definition.directives : [])
+      );
     } else if (definition.kind === Kind.SCHEMA_EXTENSION) {
       schemaExtensions.push(definition);
     }
@@ -132,7 +143,7 @@ export function buildSchemaFromSDL(
   let schema = schemaToExtend
     ? schemaToExtend
     : new GraphQLSchema({
-        query: undefined
+        query: undefined,
       });
 
   const missingTypeDefinitions: TypeDefinitionNode[] = [];
@@ -144,7 +155,7 @@ export function buildSchemaFromSDL(
       const kind = extension.kind;
       const definition = {
         kind: extKindToDefKind[kind],
-        name: extension.name
+        name: extension.name,
       } as TypeDefinitionNode;
 
       missingTypeDefinitions.push(definition);
@@ -156,13 +167,13 @@ export function buildSchemaFromSDL(
     {
       kind: Kind.DOCUMENT,
       definitions: [
-        ...Object.values(definitionsMap).flat(),
+        ...flat(Object.values(definitionsMap)),
         ...missingTypeDefinitions,
-        ...directiveDefinitions
-      ]
+        ...directiveDefinitions,
+      ],
     },
     {
-      assumeValidSDL: true
+      assumeValidSDL: true,
     }
   );
 
@@ -170,10 +181,10 @@ export function buildSchemaFromSDL(
     schema,
     {
       kind: Kind.DOCUMENT,
-      definitions: Object.values(extensionsMap).flat()
+      definitions: flat(Object.values(extensionsMap)),
     },
     {
-      assumeValidSDL: true
+      assumeValidSDL: true,
     }
   );
 
@@ -182,10 +193,11 @@ export function buildSchemaFromSDL(
   if (schemaDefinitions.length > 0 || schemaExtensions.length > 0) {
     operationTypeMap = {};
 
-    const operationTypes = [...schemaDefinitions, ...schemaExtensions]
-      .map(node => node.operationTypes)
-      .filter(isNotNullOrUndefined)
-      .flat();
+    const operationTypes = flat(
+      [...schemaDefinitions, ...schemaExtensions]
+        .map((node) => node.operationTypes)
+        .filter(isNotNullOrUndefined)
+    );
 
     for (const { operation, type } of operationTypes) {
       operationTypeMap[operation] = type.name.value;
@@ -194,17 +206,22 @@ export function buildSchemaFromSDL(
     operationTypeMap = {
       query: "Query",
       mutation: "Mutation",
-      subscription: "Subscription"
+      subscription: "Subscription",
     };
   }
 
   schema = new GraphQLSchema({
     ...schema.toConfig(),
-    ...mapValues(operationTypeMap, typeName =>
+    ...mapValues(operationTypeMap, (typeName) =>
       typeName
         ? (schema.getType(typeName) as GraphQLObjectType<any, any>)
         : undefined
-    )
+    ),
+    astNode: {
+      kind: Kind.SCHEMA_DEFINITION,
+      directives: schemaDirectives,
+      operationTypes: [], // satisfies typescript, will be ignored
+    },
   });
 
   for (const module of modules) {
@@ -221,7 +238,7 @@ const extKindToDefKind = {
   [Kind.INTERFACE_TYPE_EXTENSION]: Kind.INTERFACE_TYPE_DEFINITION,
   [Kind.UNION_TYPE_EXTENSION]: Kind.UNION_TYPE_DEFINITION,
   [Kind.ENUM_TYPE_EXTENSION]: Kind.ENUM_TYPE_DEFINITION,
-  [Kind.INPUT_OBJECT_TYPE_EXTENSION]: Kind.INPUT_OBJECT_TYPE_DEFINITION
+  [Kind.INPUT_OBJECT_TYPE_EXTENSION]: Kind.INPUT_OBJECT_TYPE_DEFINITION,
 };
 
 export function addResolversToSchema(
@@ -248,7 +265,7 @@ export function addResolversToSchema(
     if (isEnumType(type)) {
       const values = type.getValues();
       const newValues: { [key: string]: GraphQLEnumValueConfig } = {};
-      values.forEach(value => {
+      values.forEach((value) => {
         let newValue = (fieldConfigs as any)[value.name];
         if (newValue === undefined) {
           newValue = value.name;
@@ -259,7 +276,7 @@ export function addResolversToSchema(
           deprecationReason: value.deprecationReason,
           description: value.description,
           astNode: value.astNode,
-          extensions: undefined
+          extensions: undefined,
         };
       });
 
@@ -269,7 +286,7 @@ export function addResolversToSchema(
         type,
         new GraphQLEnumType({
           ...type.toConfig(),
-          values: newValues
+          values: newValues,
         })
       );
     }
@@ -294,4 +311,8 @@ export function addResolversToSchema(
       }
     }
   }
+}
+
+function isNotNullOrUndefined<T>(value: T | null | undefined): value is T {
+  return value !== null && typeof value !== "undefined";
 }
